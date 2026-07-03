@@ -1,32 +1,50 @@
-using System;
 using System.Collections.Generic;
+using Newtonsoft.Json;
 
 namespace FundBalanceDataPipeline.Models
 {
-    // 1. กล่องเล็ก: สำหรับเก็บรายละเอียดของแต่ละกองทุนที่ลูกค้าถืออยู่
-    public class FundBalanceDto
-    {
-        public string UnitholderId { get; set; }
-        public string FundCode { get; set; }
-        
-        // มาตรฐานการเงิน: ใช้ประเภทข้อมูล 'decimal' เท่านั้น ห้ามใช้ float/double เด็ดขาด เพื่อป้องกันทศนิยมเพี้ยน
-        public decimal Unit { get; set; }
-        public decimal Amount { get; set; }
-        public decimal RemainUnit { get; set; }
-        public decimal RemainAmount { get; set; }
-        public decimal AvgCost { get; set; }
-        public decimal Nav { get; set; }
-        public string NavDate { get; set; }
-        public decimal CostAmount { get; set; }
-
-        // เงื่อนไขพี่เลี้ยง: คำนวณ Gain/Loss อัตโนมัติ (Amount - CostAmount)
-        public decimal UnrealizedGainLoss => Amount - CostAmount;
-    }
-
-    // 2. กล่องใหญ่: สำหรับรองรับโครงสร้าง JSON ทั้งก้อนที่ได้กลับมาจาก FundConnext API
     public class BalanceInquiryResponse
     {
-        // ใน JSON จะมี Array ที่ชื่อว่า "result" บรรจุกล่องเล็กๆ (กองทุน) อยู่ข้างใน
-        public List<FundBalanceDto> Result { get; set; }
+        [JsonProperty("result")]
+        public List<BalanceInquiryResult> Result { get; set; } = new List<BalanceInquiryResult>();
+    }
+
+    public class BalanceInquiryResult
+    {
+        [JsonProperty("unitholderId")]
+        public string UnitholderId { get; set; } = "";
+
+        [JsonProperty("fundCode")]
+        public string FundCode { get; set; } = "";
+
+        [JsonProperty("unit")]
+        public decimal Unit { get; set; }
+
+        [JsonProperty("amount")]
+        public decimal Amount { get; set; }
+
+        [JsonProperty("remainUnit")]
+        public decimal RemainUnit { get; set; }
+
+        [JsonProperty("remainAmount")]
+        public decimal RemainAmount { get; set; }
+
+        [JsonProperty("pendingAmount")]
+        public decimal PendingAmount { get; set; }
+
+        [JsonProperty("pendingUnit")]
+        public decimal PendingUnit { get; set; }
+
+        [JsonProperty("avgCost")]
+        public decimal AvgCost { get; set; }
+
+        [JsonProperty("nav")]
+        public decimal Nav { get; set; }
+
+        [JsonProperty("navDate")]
+        public string NavDate { get; set; } = "";
+
+        [JsonProperty("costAmount")]
+        public decimal CostAmount { get; set; }
     }
 }
