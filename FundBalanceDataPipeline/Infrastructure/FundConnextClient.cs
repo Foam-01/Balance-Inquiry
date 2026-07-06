@@ -21,7 +21,7 @@ namespace FundBalanceDataPipeline.Infrastructure
             _authService = authService;
         }
 
-        public async Task<BalanceInquiryResponse> GetAccountBalancesAsync(string accountNo)
+        public async Task<BalanceInquiryResponse?> GetAccountBalancesAsync(string accountNo)
         {
             string accessToken = await _authService.GetAccessTokenAsync();
             string requestUrl = $"{_baseUrl}/account/balances?accountNo={accountNo}";
@@ -44,13 +44,13 @@ namespace FundBalanceDataPipeline.Infrastructure
                     return result ?? new BalanceInquiryResponse();
                 }
                 
-                Log.Warning($" [API Client] เซิร์ฟเวอร์ตอบกลับสถานะของบัญชี {accountNo}: {response.StatusCode}");
-                return new BalanceInquiryResponse(); 
+                Log.Warning($" [API Client] เซิร์ฟเวอร์ตอบกลับสถานะของบัญชี {accountNo}: {response.StatusCode} - รายละเอียด: {responseBody}");
+                return null; 
             }
             catch (Exception ex)
             {
                 Log.Error(ex, $" [API Client Error] เกิดข้อผิดพลาดของบัญชี {accountNo}");
-                return new BalanceInquiryResponse();
+                return null;
             }
         }
     }

@@ -36,9 +36,14 @@ app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Pipeline AP
 // ===================================================================
 //  ดึงข้อมูลยอดคงเหลือพอร์ต (Balance Inquiry) พ่นรายงาน FSTKH / FSTKD
 // ===================================================================
-app.MapPost("/api/pipeline/run", async ([FromQuery] string? accountNo, [FromQuery] string? targetDate) =>
+app.MapPost("/api/pipeline/run", async ([FromQuery] string accountNo, [FromQuery] string? targetDate) =>
 {
-    Log.Information(" [Pipeline System] เริ่มทำการดึงยอดคงเหลือรายบัญชีจาก FundConnext API ตัวจริง...");
+    if (string.IsNullOrWhiteSpace(accountNo))
+    {
+        return Results.BadRequest(new { Message = "กรุณาระบุเลขที่บัญชีลูกค้า (accountNo)" });
+    }
+
+    Log.Information($" [Pipeline System] เริ่มทำการดึงยอดคงเหลือบัญชี {accountNo} จาก FundConnext API... ");
 
     string fundConnextBaseUrl = "https://stage.fundconnext.com/api";
     string apiUser = "API_AIRA01";
@@ -55,16 +60,8 @@ app.MapPost("/api/pipeline/run", async ([FromQuery] string? accountNo, [FromQuer
         string headerFileName = $"FSTKH_{targetDateStr}.txt";
         string detailFileName = $"FSTKD_{targetDateStr}.txt";
 
-        // ดึงเลขบัญชีลูกค้าทั้งหมดจากฐานข้อมูล SBA
-        List<string> rawAccounts;
-        if (!string.IsNullOrEmpty(accountNo))
-        {
-            rawAccounts = new List<string> { accountNo };
-        }
-        else
-        {
-            rawAccounts = await SbaDatabaseService.GetAccountsFromSbaAsync();
-        }
+        // ใช้เลขบัญชีลูกค้าที่ส่งมาทาง Query Parameter
+        List<string> rawAccounts = new List<string> { accountNo };
 
         int headerCount = 0;
         int detailCount = 0;
@@ -88,7 +85,40 @@ app.MapPost("/api/pipeline/run", async ([FromQuery] string? accountNo, [FromQuer
                 headerCount++;
 
                 //  2. ดึงข้อมูลพอร์ตจริงจาก FundConnext API -> GET /api/account/balances
-                var balanceResponse = await fundClient.GetAccountBalancesAsync(formattedAccount);
+                // ค้นหา Account ID ที่ถูกต้องสำหรับ FundConnext API โดยลองฟอร์แมตต่าง ๆ
+                var candidates = new List<string>();
+                if (!string.IsNullOrEmpty(customerData.FrontAccount))
+                {
+                    candidates.Add(customerData.FrontAccount);
+                }
+                candidates.Add(formattedAccount); // e.g. 0074001-7
+                candidates.Add(dbAccount);        // e.g. 74001-7
+                candidates.Add(formattedAccount.Replace("-", "")); // e.g. 00740017
+                candidates.Add(dbAccount.Replace("-", ""));        // e.g. 740017
+
+                // หากไม่มี frontaccount ใน DB ให้ลองฟอร์แมต 99 + account (แบบไม่มี dash) ด้วย
+                if (string.IsNullOrEmpty(customerData.FrontAccount))
+                {
+                    string fallbackFront = "99" + dbAccount.Replace("-", "");
+                    candidates.Add(fallbackFront); // e.g. 99740017
+                }
+
+                BalanceInquiryResponse? balanceResponse = null;
+                string successfulAccountNo = "";
+
+                foreach (var candidate in candidates)
+                {
+                    Log.Information($" [Pipeline System] กำลังทดลองดึงข้อมูลจาก API ด้วยบัญชี: {candidate}");
+                    var tempResponse = await fundClient.GetAccountBalancesAsync(candidate);
+                    
+                    if (tempResponse != null)
+                    {
+                        balanceResponse = tempResponse;
+                        successfulAccountNo = candidate;
+                        Log.Information($" [Pipeline System] ค้นพบรูปแบบบัญชีที่ถูกต้อง: {candidate} (สามารถดึงข้อมูลได้สำเร็จ)");
+                        break;
+                    }
+                }
 
                 if (balanceResponse != null && balanceResponse.Result != null && balanceResponse.Result.Count > 0)
                 {
@@ -117,11 +147,11 @@ app.MapPost("/api/pipeline/run", async ([FromQuery] string? accountNo, [FromQuer
                         await detailWriter.WriteLineAsync(detailLine);
                         detailCount++;
                     }
-                    summaryTrail.Add(new { Account = formattedAccount, Status = "Data Fetched from API", FundsExtracted = balanceResponse.Result.Count });
+                    summaryTrail.Add(new { Account = formattedAccount, Status = $"Data Fetched from API (using {successfulAccountNo})", FundsExtracted = balanceResponse.Result.Count });
                 }
                 else
                 {
-                    summaryTrail.Add(new { Account = formattedAccount, Status = "No Records on API Path", FundsExtracted = 0 });
+                    summaryTrail.Add(new { Account = formattedAccount, Status = $"No Records on API Path (Tried {candidates.Count} formats)", FundsExtracted = 0 });
                 }
             }
         }
@@ -149,16 +179,17 @@ app.Run();
 
 public class CustomerData
 {
-    public string BranchName { get; set; } = "สำนักงานใหญ่";
+    public string BranchName { get; set; } = "";
     public string CustomerName { get; set; } = "";
-    public string AEName { get; set; } = "กัลยากร ธาดาธนิต";
+    public string AEName { get; set; } = "";
     public string HouseNo { get; set; } = "";
-    public string Soi { get; set; } = "ซอยบ้านบาตร";
-    public string Road { get; set; } = "ถนนวรจักร";
-    public string Subdistrict { get; set; } = "แขวงบ้านบาตร";
-    public string District { get; set; } = "เขตป้อมปราบศัตรูพ่าย";
-    public string Province { get; set; } = "กรุงเทพมหานคร";
-    public string Zipcode { get; set; } = "10100";
+    public string Soi { get; set; } = "";
+    public string Road { get; set; } = "";
+    public string Subdistrict { get; set; } = "";
+    public string District { get; set; } = "";
+    public string Province { get; set; } = "";
+    public string Zipcode { get; set; } = "";
+    public string FrontAccount { get; set; } = "";
 }
 
 public static class SbaDatabaseService
@@ -172,6 +203,7 @@ public static class SbaDatabaseService
     private static List<string> _taccColumns = new();
     private static List<string> _tcustColumns = new();
     private static List<string> _taddressColumns = new();
+    private static List<string> _tuserColumns = new();
     private static bool _tablesResolved = false;
 
     private static async Task ResolveTableNamesAsync(OdbcConnection conn)
@@ -206,11 +238,13 @@ public static class SbaDatabaseService
         _taccColumns = await GetTableColumnsAsync(conn, _taccTable);
         _tcustColumns = await GetTableColumnsAsync(conn, _tcustTable);
         _taddressColumns = await GetTableColumnsAsync(conn, _taddressTable);
+        _tuserColumns = await GetTableColumnsAsync(conn, _tuserTable);
 
         Log.Information($"[DB Schema] Resolved tables: tacc={_taccTable}, tcust={_tcustTable}, tuser={_tuserTable}, taddress={_taddressTable}");
         Log.Information($"[DB Schema] tacc columns: {string.Join(", ", _taccColumns)}");
         Log.Information($"[DB Schema] tcust columns: {string.Join(", ", _tcustColumns)}");
         Log.Information($"[DB Schema] taddress columns: {string.Join(", ", _taddressColumns)}");
+        Log.Information($"[DB Schema] tuser columns: {string.Join(", ", _tuserColumns)}");
 
         _tablesResolved = true;
     }
@@ -285,7 +319,7 @@ public static class SbaDatabaseService
                 if (!string.IsNullOrEmpty(accountCol) && !string.IsNullOrEmpty(custacctCol))
                 {
                     // ดึงบัญชีที่ประเภทบัญชีเป็น 7 ตามเงื่อนไข (custacct = '7')
-                    string sql = $"SELECT DISTINCT {accountCol} FROM {_taccTable} WHERE {custacctCol} = '7'";
+                    string sql = $"SELECT DISTINCT {accountCol} FROM {_taccTable} WHERE TRIM({custacctCol}) = '7'";
                     using (var cmd = new OdbcCommand(sql, conn))
                     using (var reader = await cmd.ExecuteReaderAsync())
                     {
@@ -304,13 +338,8 @@ public static class SbaDatabaseService
         }
         catch (Exception ex)
         {
-            Log.Warning($"[DB Warning] ไม่สามารถดึงเลขบัญชีจากฐานข้อมูลได้ ({ex.Message}) ระบบจะใช้บัญชีตัวแทนสำหรับทดสอบ");
-        }
-
-        if (accounts.Count == 0)
-        {
-            accounts.Add("99901-7");
-            accounts.Add("99902-7");
+            Log.Error($"[DB Error] ไม่สามารถดึงเลขบัญชีจากฐานข้อมูลได้ ({ex.Message})");
+            throw;
         }
 
         return accounts;
@@ -330,26 +359,6 @@ public static class SbaDatabaseService
             suffix = dbAccount.Substring(dashIdx + 1);
         }
 
-        // กำหนดข้อมูลตั้งต้นตามบัญชีตัวแทนสำหรับการทดสอบ
-        if (dbAccount == "99901-7" || dbAccount == "0099901-7")
-        {
-            data.BranchName = "สำนักงานใหญ่";
-            data.CustomerName = "น.ส.ทดสอบ1 ทำดี1";
-            data.AEName = "กัลยากร ธาดาธนิต";
-            data.HouseNo = "479";
-        }
-        else if (dbAccount == "99902-7" || dbAccount == "0099902-7")
-        {
-            data.BranchName = "สุรวงศ์";
-            data.CustomerName = "น.ส.ทดสอบ2 ทำดี2";
-            data.AEName = "กัลยากร ธาดาธนิต";
-            data.HouseNo = "49";
-        }
-        else
-        {
-            data.CustomerName = $"ลูกค้าบัญชี {dbAccount}";
-        }
-
         try
         {
             using (var conn = new OdbcConnection(ConnectionString))
@@ -359,130 +368,217 @@ public static class SbaDatabaseService
 
                 string cardId = "";
                 string branchCode = "";
+                string frontaccountVal = "";
 
-                // 1. ดึงข้อมูลสาขาและ cardid จาก tacc
-                string branchCol = _taccColumns.Contains("branch") ? "branch" : (_taccColumns.Contains("branchcode") ? "branchcode" : "");
-                string accountCol = _taccColumns.Contains("account") ? "account" : "";
-                string cardidCol = _taccColumns.Contains("cardid") ? "cardid" : "";
-
-                if (!string.IsNullOrEmpty(accountCol))
+                // 1. ดึงข้อมูลสาขา, cardid และ frontaccount จาก tacc
+                try
                 {
-                    string sqlAcc = $"SELECT {branchCol}, {cardidCol} FROM {_taccTable} WHERE {accountCol} = ?";
-                    using (var cmd = new OdbcCommand(sqlAcc, conn))
+                    string branchCol = _taccColumns.Contains("branch") ? "branch" : (_taccColumns.Contains("branchcode") ? "branchcode" : "");
+                    string accountCol = _taccColumns.Contains("account") ? "account" : "";
+                    string cardidCol = _taccColumns.Contains("cardid") ? "cardid" : "";
+                    string frontaccountCol = _taccColumns.Contains("frontaccount") ? "frontaccount" : "";
+
+                    var selectAccFields = new List<string>();
+                    if (!string.IsNullOrEmpty(branchCol)) selectAccFields.Add(branchCol);
+                    if (!string.IsNullOrEmpty(cardidCol)) selectAccFields.Add(cardidCol);
+                    if (!string.IsNullOrEmpty(frontaccountCol)) selectAccFields.Add(frontaccountCol);
+
+                    if (!string.IsNullOrEmpty(accountCol) && selectAccFields.Count > 0)
                     {
-                        cmd.Parameters.AddWithValue("?", dbAccount);
-                        using (var reader = await cmd.ExecuteReaderAsync())
+                        string sqlAcc = $"SELECT {string.Join(", ", selectAccFields)} FROM {_taccTable} WHERE TRIM({accountCol}) = ?";
+                        using (var cmd = new OdbcCommand(sqlAcc, conn))
                         {
-                            if (await reader.ReadAsync())
-                            {
-                                branchCode = reader[branchCol]?.ToString()?.Trim() ?? "";
-                                cardId = reader[cardidCol]?.ToString()?.Trim() ?? "";
-                            }
-                        }
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(branchCode))
-                {
-                    data.BranchName = (branchCode == "99" || branchCode == "00111" || branchCode == "01" || branchCode == "1") ? "สำนักงานใหญ่" : "สุรวงศ์";
-                }
-
-                // 2. ดึงชื่อลูกค้าจาก tcust โดยใช้ cardid
-                if (!string.IsNullOrEmpty(cardId) && _tcustColumns.Contains("cardid"))
-                {
-                    string titleCol = _tcustColumns.Contains("ttitle") ? "ttitle" : (_tcustColumns.Contains("title") ? "title" : "");
-                    string nameCol = _tcustColumns.Contains("tname") ? "tname" : (_tcustColumns.Contains("name") ? "name" : "");
-                    string surnameCol = _tcustColumns.Contains("tsurname") ? "tsurname" : (_tcustColumns.Contains("surname") ? "surname" : "");
-
-                    var colsToSelect = new List<string>();
-                    if (!string.IsNullOrEmpty(titleCol)) colsToSelect.Add(titleCol);
-                    if (!string.IsNullOrEmpty(nameCol)) colsToSelect.Add(nameCol);
-                    if (!string.IsNullOrEmpty(surnameCol)) colsToSelect.Add(surnameCol);
-
-                    if (colsToSelect.Count > 0)
-                    {
-                        string sqlCust = $"SELECT {string.Join(", ", colsToSelect)} FROM {_tcustTable} WHERE cardid = ?";
-                        using (var cmd = new OdbcCommand(sqlCust, conn))
-                        {
-                            cmd.Parameters.AddWithValue("?", cardId);
+                            var param = new OdbcParameter("?", OdbcType.VarChar);
+                            param.Value = dbAccount;
+                            cmd.Parameters.Add(param);
                             using (var reader = await cmd.ExecuteReaderAsync())
                             {
                                 if (await reader.ReadAsync())
                                 {
-                                    string title = !string.IsNullOrEmpty(titleCol) ? (reader[titleCol]?.ToString()?.Trim() ?? "") : "";
-                                    string name = !string.IsNullOrEmpty(nameCol) ? (reader[nameCol]?.ToString()?.Trim() ?? "") : "";
-                                    string surname = !string.IsNullOrEmpty(surnameCol) ? (reader[surnameCol]?.ToString()?.Trim() ?? "") : "";
-
-                                    data.CustomerName = $"{title}{name} {surname}".Replace("  ", " ").Trim();
+                                    if (!string.IsNullOrEmpty(branchCol)) branchCode = reader[branchCol]?.ToString()?.Trim() ?? "";
+                                    if (!string.IsNullOrEmpty(cardidCol)) cardId = reader[cardidCol]?.ToString()?.Trim() ?? "";
+                                    if (!string.IsNullOrEmpty(frontaccountCol)) frontaccountVal = reader[frontaccountCol]?.ToString()?.Trim() ?? "";
                                 }
                             }
                         }
                     }
+
+                    if (!string.IsNullOrEmpty(branchCode))
+                    {
+                        data.BranchName = (branchCode == "99" || branchCode == "00111" || branchCode == "01" || branchCode == "1") ? "สำนักงานใหญ่" : "สุรวงศ์";
+                    }
+                    data.FrontAccount = frontaccountVal;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, $"[DB Error] Step 1 (tacc) failed for account {dbAccount}");
                 }
 
-                // 3. ดึงที่อยู่ลูกค้าจาก tcustaddr / taddress โดยใช้ cardid หรือ custcode
-                string addressLinkCol = "";
-                if (_taddressColumns.Contains("cardid")) addressLinkCol = "cardid";
-                else if (_taddressColumns.Contains("custcode")) addressLinkCol = "custcode";
-
-                if (!string.IsNullOrEmpty(addressLinkCol))
+                // 1.5 ดึงข้อมูล AE จาก tuser โดยใช้ frontaccountVal
+                try
                 {
-                    string linkVal = addressLinkCol == "cardid" ? cardId : code;
-                    if (!string.IsNullOrEmpty(linkVal))
+                    if (!string.IsNullOrEmpty(frontaccountVal) && _tuserColumns.Count > 0)
                     {
-                        string houseCol = _taddressColumns.Contains("houseno") ? "houseno" : "";
-                        string soiCol = _taddressColumns.Contains("soi") ? "soi" : "";
-                        string roadCol = _taddressColumns.Contains("road") ? "road" : "";
-                        string tambonCol = _taddressColumns.Contains("tambon") ? "tambon" : (_taddressColumns.Contains("subdistrict") ? "subdistrict" : "");
-                        string amphurCol = _taddressColumns.Contains("amphur") ? "amphur" : (_taddressColumns.Contains("district") ? "district" : "");
-                        string provinceCol = _taddressColumns.Contains("province") ? "province" : "";
-                        string zipcodeCol = _taddressColumns.Contains("zipcode") ? "zipcode" : "";
+                        string userKeyCol = "";
+                        if (_tuserColumns.Contains("username")) userKeyCol = "username";
+                        else if (_tuserColumns.Contains("userid")) userKeyCol = "userid";
+                        else if (_tuserColumns.Contains("usercode")) userKeyCol = "usercode";
+                        else if (_tuserColumns.Contains("user_id")) userKeyCol = "user_id";
+                        else if (_tuserColumns.Contains("name")) userKeyCol = "name";
 
-                        var selectFields = new List<string>();
-                        if (!string.IsNullOrEmpty(houseCol)) selectFields.Add(houseCol);
-                        if (!string.IsNullOrEmpty(soiCol)) selectFields.Add(soiCol);
-                        if (!string.IsNullOrEmpty(roadCol)) selectFields.Add(roadCol);
-                        if (!string.IsNullOrEmpty(tambonCol)) selectFields.Add(tambonCol);
-                        if (!string.IsNullOrEmpty(amphurCol)) selectFields.Add(amphurCol);
-                        if (!string.IsNullOrEmpty(provinceCol)) selectFields.Add(provinceCol);
-                        if (!string.IsNullOrEmpty(zipcodeCol)) selectFields.Add(zipcodeCol);
-
-                        if (selectFields.Count > 0)
+                        if (!string.IsNullOrEmpty(userKeyCol))
                         {
-                            string sqlAddr = $"SELECT {string.Join(", ", selectFields)} FROM {_taddressTable} WHERE {addressLinkCol} = ?";
-                            
-                            // เพิ่มเงื่อนไขกรองประเภทที่อยู่บ้าน (addrtype = 'H' หรือ '1') หากมีคอลัมน์นี้
-                            if (_taddressColumns.Contains("addrtype"))
-                            {
-                                sqlAddr += " AND (addrtype = 'H' OR addrtype = '1')";
-                            }
+                            string aeNameCol = _tuserColumns.Contains("tname") ? "tname" : (_tuserColumns.Contains("name") ? "name" : "");
+                            string aeSurnameCol = _tuserColumns.Contains("tsurname") ? "tsurname" : (_tuserColumns.Contains("surname") ? "surname" : "");
 
-                            using (var cmd = new OdbcCommand(sqlAddr, conn))
+                            var userCols = new List<string>();
+                            if (!string.IsNullOrEmpty(aeNameCol)) userCols.Add(aeNameCol);
+                            if (!string.IsNullOrEmpty(aeSurnameCol)) userCols.Add(aeSurnameCol);
+
+                            if (userCols.Count > 0)
                             {
-                                if (addressLinkCol == "custcode" && int.TryParse(linkVal, out int numericCustCode))
+                                string sqlUser = $"SELECT {string.Join(", ", userCols)} FROM {_tuserTable} WHERE TRIM({userKeyCol}) = ?";
+                                using (var cmd = new OdbcCommand(sqlUser, conn))
                                 {
-                                    cmd.Parameters.AddWithValue("?", numericCustCode);
-                                }
-                                else
-                                {
-                                    cmd.Parameters.AddWithValue("?", linkVal);
-                                }
-                                using (var reader = await cmd.ExecuteReaderAsync())
-                                {
-                                    if (await reader.ReadAsync())
+                                    var param = new OdbcParameter("?", OdbcType.VarChar);
+                                    param.Value = frontaccountVal;
+                                    cmd.Parameters.Add(param);
+                                    using (var reader = await cmd.ExecuteReaderAsync())
                                     {
-                                        if (!string.IsNullOrEmpty(houseCol)) data.HouseNo = reader[houseCol]?.ToString()?.Trim() ?? "";
-                                        if (!string.IsNullOrEmpty(soiCol)) data.Soi = reader[soiCol]?.ToString()?.Trim() ?? "";
-                                        if (!string.IsNullOrEmpty(roadCol)) data.Road = reader[roadCol]?.ToString()?.Trim() ?? "";
-                                        if (!string.IsNullOrEmpty(tambonCol)) data.Subdistrict = reader[tambonCol]?.ToString()?.Trim() ?? "";
-                                        if (!string.IsNullOrEmpty(amphurCol)) data.District = reader[amphurCol]?.ToString()?.Trim() ?? "";
-                                        if (!string.IsNullOrEmpty(provinceCol)) data.Province = reader[provinceCol]?.ToString()?.Trim() ?? "";
-                                        if (!string.IsNullOrEmpty(zipcodeCol)) data.Zipcode = reader[zipcodeCol]?.ToString()?.Trim() ?? "";
+                                        if (await reader.ReadAsync())
+                                        {
+                                            string aeName = !string.IsNullOrEmpty(aeNameCol) ? (reader[aeNameCol]?.ToString()?.Trim() ?? "") : "";
+                                            string aeSurname = !string.IsNullOrEmpty(aeSurnameCol) ? (reader[aeSurnameCol]?.ToString()?.Trim() ?? "") : "";
+                                            data.AEName = $"{aeName} {aeSurname}".Replace("  ", " ").Trim();
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, $"[DB Error] Step 1.5 (tuser) failed for frontaccount {frontaccountVal}");
+                }
+
+                // 2. ดึงชื่อลูกค้าจาก tcust โดยใช้ cardid
+                try
+                {
+                    if (!string.IsNullOrEmpty(cardId) && _tcustColumns.Contains("cardid"))
+                    {
+                        string titleCol = _tcustColumns.Contains("ttitle") ? "ttitle" : (_tcustColumns.Contains("title") ? "title" : "");
+                        string nameCol = _tcustColumns.Contains("tname") ? "tname" : (_tcustColumns.Contains("name") ? "name" : "");
+                        string surnameCol = _tcustColumns.Contains("tsurname") ? "tsurname" : (_tcustColumns.Contains("surname") ? "surname" : "");
+
+                        var colsToSelect = new List<string>();
+                        if (!string.IsNullOrEmpty(titleCol)) colsToSelect.Add(titleCol);
+                        if (!string.IsNullOrEmpty(nameCol)) colsToSelect.Add(nameCol);
+                        if (!string.IsNullOrEmpty(surnameCol)) colsToSelect.Add(surnameCol);
+
+                        if (colsToSelect.Count > 0)
+                        {
+                            string sqlCust = $"SELECT {string.Join(", ", colsToSelect)} FROM {_tcustTable} WHERE TRIM(cardid) = ?";
+                            using (var cmd = new OdbcCommand(sqlCust, conn))
+                            {
+                                var param = new OdbcParameter("?", OdbcType.VarChar);
+                                param.Value = cardId;
+                                cmd.Parameters.Add(param);
+                                using (var reader = await cmd.ExecuteReaderAsync())
+                                {
+                                    if (await reader.ReadAsync())
+                                    {
+                                        string title = !string.IsNullOrEmpty(titleCol) ? (reader[titleCol]?.ToString()?.Trim() ?? "") : "";
+                                        string name = !string.IsNullOrEmpty(nameCol) ? (reader[nameCol]?.ToString()?.Trim() ?? "") : "";
+                                        string surname = !string.IsNullOrEmpty(surnameCol) ? (reader[surnameCol]?.ToString()?.Trim() ?? "") : "";
+
+                                        data.CustomerName = $"{title}{name} {surname}".Replace("  ", " ").Trim();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, $"[DB Error] Step 2 (tcust) failed for cardId {cardId}");
+                }
+
+                // 3. ดึงที่อยู่ลูกค้าจาก tcustaddr / taddress โดยใช้ custcode หรือ cardid
+                try
+                {
+                    string addressLinkCol = "";
+                    if (_taddressColumns.Contains("custcode")) addressLinkCol = "custcode";
+                    else if (_taddressColumns.Contains("cardid")) addressLinkCol = "cardid";
+
+                    if (!string.IsNullOrEmpty(addressLinkCol))
+                    {
+                        string linkVal = addressLinkCol == "custcode" ? code : cardId;
+                        if (!string.IsNullOrEmpty(linkVal))
+                        {
+                            string houseCol = _taddressColumns.Contains("houseno") ? "houseno" : "";
+                            string soiCol = _taddressColumns.Contains("soi") ? "soi" : "";
+                            string roadCol = _taddressColumns.Contains("road") ? "road" : "";
+                            string tambonCol = _taddressColumns.Contains("tambon") ? "tambon" : (_taddressColumns.Contains("subdistrict") ? "subdistrict" : "");
+                            string amphurCol = _taddressColumns.Contains("amphur") ? "amphur" : (_taddressColumns.Contains("district") ? "district" : "");
+                            string provinceCol = _taddressColumns.Contains("province") ? "province" : "";
+                            string zipcodeCol = _taddressColumns.Contains("zipcode") ? "zipcode" : "";
+
+                            var selectFields = new List<string>();
+                            if (!string.IsNullOrEmpty(houseCol)) selectFields.Add(houseCol);
+                            if (!string.IsNullOrEmpty(soiCol)) selectFields.Add(soiCol);
+                            if (!string.IsNullOrEmpty(roadCol)) selectFields.Add(roadCol);
+                            if (!string.IsNullOrEmpty(tambonCol)) selectFields.Add(tambonCol);
+                            if (!string.IsNullOrEmpty(amphurCol)) selectFields.Add(amphurCol);
+                            if (!string.IsNullOrEmpty(provinceCol)) selectFields.Add(provinceCol);
+                            if (!string.IsNullOrEmpty(zipcodeCol)) selectFields.Add(zipcodeCol);
+                            if (_taddressColumns.Contains("addrtype")) selectFields.Add("addrtype");
+
+                            if (selectFields.Count > 0)
+                            {
+                                string sqlAddr = $"SELECT {string.Join(", ", selectFields)} FROM {_taddressTable} WHERE TRIM({addressLinkCol}) = ?";
+                                
+                                using (var cmd = new OdbcCommand(sqlAddr, conn))
+                                {
+                                    var param = new OdbcParameter("?", OdbcType.VarChar);
+                                    param.Value = linkVal;
+                                    cmd.Parameters.Add(param);
+                                    using (var reader = await cmd.ExecuteReaderAsync())
+                                    {
+                                        while (await reader.ReadAsync())
+                                        {
+                                            string currentAddrType = "";
+                                            if (_taddressColumns.Contains("addrtype"))
+                                            {
+                                                currentAddrType = reader["addrtype"]?.ToString()?.Trim() ?? "";
+                                            }
+
+                                            // กรองเฉพาะที่อยู่บ้าน (H) หรือ ประเภท 1 (หรือถ้าไม่มีการระบุประเภท ให้เลือกแถวแรก)
+                                            if (string.IsNullOrEmpty(currentAddrType) || currentAddrType.Equals("H", StringComparison.OrdinalIgnoreCase) || currentAddrType == "1")
+                                            {
+                                                if (!string.IsNullOrEmpty(houseCol)) data.HouseNo = reader[houseCol]?.ToString()?.Trim() ?? "";
+                                                if (!string.IsNullOrEmpty(soiCol)) data.Soi = reader[soiCol]?.ToString()?.Trim() ?? "";
+                                                if (!string.IsNullOrEmpty(roadCol)) data.Road = reader[roadCol]?.ToString()?.Trim() ?? "";
+                                                if (!string.IsNullOrEmpty(tambonCol)) data.Subdistrict = reader[tambonCol]?.ToString()?.Trim() ?? "";
+                                                if (!string.IsNullOrEmpty(amphurCol)) data.District = reader[amphurCol]?.ToString()?.Trim() ?? "";
+                                                if (!string.IsNullOrEmpty(provinceCol)) data.Province = reader[provinceCol]?.ToString()?.Trim() ?? "";
+                                                if (!string.IsNullOrEmpty(zipcodeCol)) data.Zipcode = reader[zipcodeCol]?.ToString()?.Trim() ?? "";
+
+                                                if (currentAddrType.Equals("H", StringComparison.OrdinalIgnoreCase) || currentAddrType == "1")
+                                                {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, $"[DB Error] Step 3 (tcustaddr) failed for linkVal {cardId}/{code}");
                 }
 
                 Log.Information($"[DB] ดึงข้อมูลลูกค้าสำเร็จสำหรับบัญชี {dbAccount}: ชื่อ={data.CustomerName}, สาขา={data.BranchName}, เจ้าหน้าที่={data.AEName}");
@@ -490,7 +586,7 @@ public static class SbaDatabaseService
         }
         catch (Exception ex)
         {
-            Log.Warning($"[DB Warning] ไม่สามารถดึงข้อมูลลูกค้าของบัญชี {dbAccount} ได้ ({ex.Message}) ระบบจะใช้ข้อมูลจำลองตามแผนสำรอง");
+            Log.Warning($"[DB Warning] ไม่สามารถดึงข้อมูลลูกค้าของบัญชี {dbAccount} ได้ ({ex.Message})");
         }
 
         return data;
