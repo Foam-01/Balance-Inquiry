@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("FundBalanceDataPipeline")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bfac2691480465ca0b9bffa7ef95176ed38a1024")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+d4009226aa713952a13dccb2726ab6e02843bace")]
 [assembly: System.Reflection.AssemblyProductAttribute("FundBalanceDataPipeline")]
 [assembly: System.Reflection.AssemblyTitleAttribute("FundBalanceDataPipeline")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
