@@ -14,6 +14,7 @@ using FundBalanceDataPipeline.Infrastructure;
 using FundBalanceDataPipeline.Models;
 using FundBalanceDataPipeline.Services;
 using Serilog;
+using System.Data.Odbc;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -77,19 +78,40 @@ async Task<object> RunPipelineInternalAsync(string? accountNo, string? targetDat
     }
 
     bool isAllAccounts = string.IsNullOrWhiteSpace(accountNo) || accountNo.Equals("ALL", StringComparison.OrdinalIgnoreCase);
-    List<string> rawAccounts = new List<string>();
+    List<string>? specificAccounts = isAllAccounts ? null : accountNo!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
-    if (isAllAccounts)
+    Log.Information(" [Pipeline System] กำลังดึงข้อมูลบัญชีและที่อยู่ลูกค้าประเภท 7 จาก SBA ขึ้น Memory...");
+    var pipelineDataList = SbaDatabaseService.LoadAllPipelineDataFromSba(specificAccounts);
+
+    // หากระบุบัญชีทดสอบที่ไม่มีในฐานข้อมูล SBA (เช่น บัญชีทดสอบ 0099901-7 บน FundConnext Stage)
+    // ระบบจะทำการจำลองเฉพาะ "ชื่อ-ที่อยู่ลูกค้า" เพื่อใช้สร้างรายงาน FSTKH และยอมให้ไปยิงดึงยอดกองทุนจริงจาก API
+    if (pipelineDataList.Count == 0 && specificAccounts != null && specificAccounts.Count > 0)
     {
-        Log.Information(" [Pipeline System] กำลังดึงรายชื่อบัญชีประเภท 7 ทั้งหมดจากฐานข้อมูล SBA...");
-        rawAccounts = await SbaDatabaseService.GetAccountsFromSbaAsync();
-        Log.Information($" [Pipeline System] พบบัญชีประเภท 7 ในฐานข้อมูล SBA ทั้งหมด {rawAccounts.Count} บัญชี");
+        Log.Warning(" [Pipeline System] ไม่พบเลขบัญชีดังกล่าวในฐานข้อมูล SBA ระบบทำการจำลองข้อมูลลูกค้าชั่วคราว (Fallback Customer Data) เพื่อส่งไปเรียกใช้งาน API ทดสอบ...");
+        foreach (var acc in specificAccounts)
+        {
+            pipelineDataList.Add(new CustomerPipelineData
+            {
+                AccountNo = acc,
+                DbAccount = acc,
+                Customer = new CustomerData
+                {
+                    CustomerName = "บัญชีทดสอบพิเศษ (STAGE TEST)",
+                    BranchName = "สำนักงานใหญ่",
+                    AEName = "ผู้ดูแลระบบเทส",
+                    HouseNo = "99/9",
+                    Soi = "ซอยทดสอบ",
+                    Road = "ถนนทดสอบ",
+                    Subdistrict = "พญาไท",
+                    District = "พญาไท",
+                    Province = "กรุงเทพมหานคร",
+                    Zipcode = "10400"
+                }
+            });
+        }
     }
-    else
-    {
-        rawAccounts = accountNo!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-        Log.Information($" [Pipeline System] บัญชีที่จะประมวลผลตามที่ระบุ: {string.Join(", ", rawAccounts)}");
-    }
+
+    Log.Information($" [Pipeline System] พบบัญชีประเภท 7 ที่โหลดขึ้นมาสำเร็จ {pipelineDataList.Count} บัญชี (ปิดการเชื่อมต่อฐานข้อมูล SBA เรียบร้อย)");
 
     string fundConnextBaseUrl = AppConfigService.GetAppSetting("linkAPI_FCN");
     if (string.IsNullOrEmpty(fundConnextBaseUrl)) fundConnextBaseUrl = "https://stage.fundconnext.com/api";
@@ -108,6 +130,7 @@ async Task<object> RunPipelineInternalAsync(string? accountNo, string? targetDat
 
     int headerCount = 0;
     int detailCount = 0;
+    int failedCount = 0;
     var summaryTrail = new List<object>();
 
     bool shouldAppend = !isAllAccounts;
@@ -115,34 +138,26 @@ async Task<object> RunPipelineInternalAsync(string? accountNo, string? targetDat
     using (var headerWriter = new StreamWriter(headerFileName, shouldAppend, Encoding.UTF8) { AutoFlush = true })
     using (var detailWriter = new StreamWriter(detailFileName, shouldAppend, Encoding.UTF8) { AutoFlush = true })
     {
-        foreach (var rawAccount in rawAccounts)
+        foreach (var item in pipelineDataList)
         {
+            string rawAccount = item.AccountNo;
             try
             {
-                string formattedAccount = rawAccount.StartsWith("00") ? rawAccount : "00" + rawAccount;
-                string dbAccount = formattedAccount.StartsWith("00") ? formattedAccount.Substring(2) : formattedAccount;
+                // หน่วงเวลา 250ms เพื่อให้ระบบเครือข่ายได้พัก ป้องกันโดน Firewall บล็อกและพอร์ต Socket เต็ม
+                await Task.Delay(250);
 
-                var customerData = await SbaDatabaseService.GetCustomerDataFromSbaAsync(dbAccount);
+                string formattedAccount = item.AccountNo;
+                string dbAccount = item.DbAccount;
+                var customerData = item.Customer;
 
                 string headerLine = $"{targetDateStr}|{customerData.BranchName}|{formattedAccount}|{customerData.CustomerName}|{customerData.AEName}|{customerData.HouseNo}|{customerData.Soi}|{customerData.Road}|{customerData.Subdistrict}|{customerData.District}|{customerData.Province}|{customerData.Zipcode}|0107550000211";
                 await headerWriter.WriteLineAsync(headerLine);
                 headerCount++;
 
+                // คัดกรองตัวเลือกในการยิง API เฉพาะรูปแบบบัญชีลูกค้าหลัก 2 รูปแบบเท่านั้น
                 var candidates = new List<string>();
-                if (!string.IsNullOrEmpty(customerData.FrontAccount))
-                {
-                    candidates.Add(customerData.FrontAccount);
-                }
-                candidates.Add(formattedAccount);
-                candidates.Add(dbAccount);
-                candidates.Add(formattedAccount.Replace("-", ""));
-                candidates.Add(dbAccount.Replace("-", ""));
-
-                if (string.IsNullOrEmpty(customerData.FrontAccount))
-                {
-                    string fallbackFront = "99" + dbAccount.Replace("-", "");
-                    candidates.Add(fallbackFront);
-                }
+                candidates.Add(formattedAccount);                  // แบบมีขีด เช่น 61140-7
+                candidates.Add(formattedAccount.Replace("-", "")); // แบบไม่มีขีด เช่น 611407
 
                 BalanceInquiryResponse? balanceResponse = null;
                 string successfulAccountNo = "";
@@ -194,11 +209,20 @@ async Task<object> RunPipelineInternalAsync(string? accountNo, string? targetDat
             }
             catch (Exception ex)
             {
-                Log.Error(ex, $" [Pipeline System] เกิดข้อผิดพลาดในการประมวลผลบัญชี {rawAccount} (ระบบจะข้ามไปทำบัญชีถัดไป)");
+                Log.Error(ex, $" [Pipeline System] เกิดข้อผิดพลาดในการประมวลผลบัญชี {rawAccount}");
                 summaryTrail.Add(new { Account = rawAccount, Status = $"Failed: {ex.Message}", FundsExtracted = 0 });
+                failedCount++;
             }
         }
     }
+
+    Log.Information(" ===================================================================");
+    Log.Information("  [Pipeline System] สรุปผลการประมวลผล Data Pipeline:");
+    Log.Information($"  - จำนวนบัญชีที่โหลดมาประมวลผลทั้งหมด: {pipelineDataList.Count} บัญชี");
+    Log.Information($"  - จำนวนแถวที่เขียนลงรายงาน FSTKH (สำเร็จ): {headerCount} แถว");
+    Log.Information($"  - จำนวนแถวที่เขียนลงรายงาน FSTKD (กองทุน): {detailCount} แถว");
+    Log.Information($"  - จำนวนบัญชีที่เกิดข้อผิดพลาด: {failedCount} บัญชี");
+    Log.Information(" ===================================================================");
 
     return new
     {

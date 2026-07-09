@@ -35,6 +35,9 @@ namespace FundBalanceDataPipeline.Infrastructure
 
                 Log.Information($" [API Client] ยิงคำขอข้อมูลบัญชี: {accountNo}");
                 
+                // สั่งปิดการเชื่อมต่อพอร์ต Socket ทันทีหลังทำงานเสร็จ ป้องกันปัญหา Connection Pool ค้างคาและแครชบนระบบเครือข่ายบริษัท
+                request.Headers.ConnectionClose = true;
+                
                 var response = await _httpClient.SendAsync(request);
                 string responseBody = await response.Content.ReadAsStringAsync();
 
