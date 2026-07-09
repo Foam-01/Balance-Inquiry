@@ -265,8 +265,8 @@ public static class SbaDatabaseService
             }
 
             string sql = $@"
-                    SELECT colname 
-                    FROM {prefix}syscolumns 
+                    SELECT colname
+                    FROM {prefix}syscolumns
                     WHERE tabid = (SELECT tabid FROM {prefix}systables WHERE tabname = '{pureTableName.ToLower()}')";
 
             using (var cmd = new OdbcCommand(sql, conn))
