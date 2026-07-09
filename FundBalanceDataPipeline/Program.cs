@@ -87,7 +87,7 @@ async Task<object> RunPipelineInternalAsync(string? accountNo, string? targetDat
     }
     else
     {
-        rawAccounts = accountNo.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        rawAccounts = accountNo!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
         Log.Information($" [Pipeline System] บัญชีที่จะประมวลผลตามที่ระบุ: {string.Join(", ", rawAccounts)}");
     }
 
