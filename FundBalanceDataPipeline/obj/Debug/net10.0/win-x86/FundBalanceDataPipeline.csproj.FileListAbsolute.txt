@@ -39,3 +39,5 @@ C:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\obj\Debug\
 C:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\obj\Debug\net10.0\win-x86\staticwebassets.development.json
 C:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\obj\Debug\net10.0\win-x86\staticwebassets.build.endpoints.json
 C:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\obj\Debug\net10.0\win-x86\swae.build.ex.cache
+C:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\bin\Debug\net10.0\win-x86\App.config
+C:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\bin\Debug\net10.0\win-x86\FundBalanceDataPipeline.dll.config
