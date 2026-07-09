@@ -21,7 +21,7 @@ namespace FundBalanceDataPipeline.Infrastructure
                 var doc = new XmlDocument();
                 doc.Load(configPath);
                 var node = doc.SelectSingleNode($"//connectionStrings/add[@name='{name}']");
-                return node?.Attributes["connectionString"]?.Value ?? "";
+                return node?.Attributes?["connectionString"]?.Value ?? "";
             }
             catch (Exception ex)
             {
@@ -44,7 +44,7 @@ namespace FundBalanceDataPipeline.Infrastructure
                 var doc = new XmlDocument();
                 doc.Load(configPath);
                 var node = doc.SelectSingleNode($"//appSettings/add[@key='{key}']");
-                return node?.Attributes["value"]?.Value ?? "";
+                return node?.Attributes?["value"]?.Value ?? "";
             }
             catch (Exception ex)
             {
