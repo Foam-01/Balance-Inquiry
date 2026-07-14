@@ -14,9 +14,9 @@ namespace FundBalanceDataPipeline.Infrastructure
         private readonly string _baseUrl;
         private readonly FundConnextAuthService _authService;
 
-        public FundConnextClient(string baseUrl, FundConnextAuthService authService)
+        public FundConnextClient(string baseUrl, FundConnextAuthService authService, HttpClient httpClient)
         {
-            _httpClient = new HttpClient();
+            _httpClient = httpClient;
             _baseUrl = baseUrl;
             _authService = authService;
         }
@@ -35,20 +35,19 @@ namespace FundBalanceDataPipeline.Infrastructure
 
                 Log.Information($" [API Client] ยิงคำขอข้อมูลบัญชี: {accountNo}");
                 
-                // สั่งปิดการเชื่อมต่อพอร์ต Socket ทันทีหลังทำงานเสร็จ ป้องกันปัญหา Connection Pool ค้างคาและแครชบนระบบเครือข่ายบริษัท
-                request.Headers.ConnectionClose = true;
-                
-                var response = await _httpClient.SendAsync(request);
-                string responseBody = await response.Content.ReadAsStringAsync();
-
-                if (response.IsSuccessStatusCode)
+                using (var response = await _httpClient.SendAsync(request))
                 {
-                    var result = JsonConvert.DeserializeObject<BalanceInquiryResponse>(responseBody);
-                    return result ?? new BalanceInquiryResponse();
-                }
-                
-                Log.Warning($" [API Client] เซิร์ฟเวอร์ตอบกลับสถานะของบัญชี {accountNo}: {response.StatusCode} - รายละเอียด: {responseBody}");
-                return null; 
+                    string responseBody = await response.Content.ReadAsStringAsync();
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var result = JsonConvert.DeserializeObject<BalanceInquiryResponse>(responseBody);
+                        return result ?? new BalanceInquiryResponse();
+                    }
+                    
+                    Log.Warning($" [API Client] เซิร์ฟเวอร์ตอบกลับสถานะของบัญชี {accountNo}: {response.StatusCode} - รายละเอียด: {responseBody}");
+                    return null; 
+                } 
             }
             catch (Exception ex)
             {

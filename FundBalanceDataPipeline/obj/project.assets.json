@@ -207,203 +207,22 @@
             "rid": "win"
           }
         }
-      }
-    },
-    "net10.0/win-x86": {
-      "Microsoft.Extensions.ApiDescription.Server/10.0.0": {
-        "type": "package",
-        "build": {
-          "build/Microsoft.Extensions.ApiDescription.Server.props": {},
-          "build/Microsoft.Extensions.ApiDescription.Server.targets": {}
-        },
-        "buildMultiTargeting": {
-          "buildMultiTargeting/Microsoft.Extensions.ApiDescription.Server.props": {},
-          "buildMultiTargeting/Microsoft.Extensions.ApiDescription.Server.targets": {}
-        }
       },
-      "Microsoft.OpenApi/2.7.5": {
-        "type": "package",
-        "compile": {
-          "lib/net8.0/Microsoft.OpenApi.dll": {
-            "related": ".pdb;.xml"
-          }
-        },
-        "runtime": {
-          "lib/net8.0/Microsoft.OpenApi.dll": {
-            "related": ".pdb;.xml"
-          }
-        }
-      },
-      "Newtonsoft.Json/13.0.4": {
-        "type": "package",
-        "compile": {
-          "lib/net6.0/Newtonsoft.Json.dll": {
-            "related": ".xml"
-          }
-        },
-        "runtime": {
-          "lib/net6.0/Newtonsoft.Json.dll": {
-            "related": ".xml"
-          }
-        }
-      },
-      "Polly/8.7.0": {
-        "type": "package",
+      "SbaExporter/1.0.0": {
+        "type": "project",
+        "framework": ".NETCoreApp,Version=v10.0",
         "dependencies": {
-          "Polly.Core": "8.7.0"
+          "Newtonsoft.Json": "13.0.4",
+          "Serilog": "4.3.1",
+          "Serilog.Sinks.Console": "6.1.1",
+          "Serilog.Sinks.File": "7.0.0",
+          "System.Data.Odbc": "10.0.9"
         },
         "compile": {
-          "lib/net6.0/Polly.dll": {
-            "related": ".pdb;.xml"
-          }
+          "bin/placeholder/SbaExporter.dll": {}
         },
         "runtime": {
-          "lib/net6.0/Polly.dll": {
-            "related": ".pdb;.xml"
-          }
-        }
-      },
-      "Polly.Core/8.7.0": {
-        "type": "package",
-        "compile": {
-          "lib/net8.0/Polly.Core.dll": {
-            "related": ".pdb;.xml"
-          }
-        },
-        "runtime": {
-          "lib/net8.0/Polly.Core.dll": {
-            "related": ".pdb;.xml"
-          }
-        }
-      },
-      "Serilog/4.3.1": {
-        "type": "package",
-        "compile": {
-          "lib/net10.0/Serilog.dll": {
-            "related": ".xml"
-          }
-        },
-        "runtime": {
-          "lib/net10.0/Serilog.dll": {
-            "related": ".xml"
-          }
-        },
-        "build": {
-          "buildTransitive/Serilog.targets": {}
-        }
-      },
-      "Serilog.Sinks.Console/6.1.1": {
-        "type": "package",
-        "dependencies": {
-          "Serilog": "4.0.0"
-        },
-        "compile": {
-          "lib/net8.0/Serilog.Sinks.Console.dll": {
-            "related": ".xml"
-          }
-        },
-        "runtime": {
-          "lib/net8.0/Serilog.Sinks.Console.dll": {
-            "related": ".xml"
-          }
-        }
-      },
-      "Serilog.Sinks.File/7.0.0": {
-        "type": "package",
-        "dependencies": {
-          "Serilog": "4.2.0"
-        },
-        "compile": {
-          "lib/net9.0/Serilog.Sinks.File.dll": {
-            "related": ".xml"
-          }
-        },
-        "runtime": {
-          "lib/net9.0/Serilog.Sinks.File.dll": {
-            "related": ".xml"
-          }
-        }
-      },
-      "Swashbuckle.AspNetCore/10.2.3": {
-        "type": "package",
-        "dependencies": {
-          "Microsoft.Extensions.ApiDescription.Server": "10.0.0",
-          "Swashbuckle.AspNetCore.Swagger": "10.2.3",
-          "Swashbuckle.AspNetCore.SwaggerGen": "10.2.3",
-          "Swashbuckle.AspNetCore.SwaggerUI": "10.2.3"
-        },
-        "build": {
-          "build/Swashbuckle.AspNetCore.props": {}
-        },
-        "buildMultiTargeting": {
-          "buildMultiTargeting/Swashbuckle.AspNetCore.props": {}
-        }
-      },
-      "Swashbuckle.AspNetCore.Swagger/10.2.3": {
-        "type": "package",
-        "dependencies": {
-          "Microsoft.OpenApi": "2.7.5"
-        },
-        "compile": {
-          "lib/net10.0/Swashbuckle.AspNetCore.Swagger.dll": {
-            "related": ".pdb;.xml"
-          }
-        },
-        "runtime": {
-          "lib/net10.0/Swashbuckle.AspNetCore.Swagger.dll": {
-            "related": ".pdb;.xml"
-          }
-        },
-        "frameworkReferences": [
-          "Microsoft.AspNetCore.App"
-        ]
-      },
-      "Swashbuckle.AspNetCore.SwaggerGen/10.2.3": {
-        "type": "package",
-        "dependencies": {
-          "Swashbuckle.AspNetCore.Swagger": "10.2.3"
-        },
-        "compile": {
-          "lib/net10.0/Swashbuckle.AspNetCore.SwaggerGen.dll": {
-            "related": ".pdb;.xml"
-          }
-        },
-        "runtime": {
-          "lib/net10.0/Swashbuckle.AspNetCore.SwaggerGen.dll": {
-            "related": ".pdb;.xml"
-          }
-        }
-      },
-      "Swashbuckle.AspNetCore.SwaggerUI/10.2.3": {
-        "type": "package",
-        "compile": {
-          "lib/net10.0/Swashbuckle.AspNetCore.SwaggerUI.dll": {
-            "related": ".pdb;.xml"
-          }
-        },
-        "runtime": {
-          "lib/net10.0/Swashbuckle.AspNetCore.SwaggerUI.dll": {
-            "related": ".pdb;.xml"
-          }
-        },
-        "frameworkReferences": [
-          "Microsoft.AspNetCore.App"
-        ]
-      },
-      "System.Data.Odbc/10.0.9": {
-        "type": "package",
-        "compile": {
-          "lib/net10.0/System.Data.Odbc.dll": {
-            "related": ".xml"
-          }
-        },
-        "runtime": {
-          "runtimes/win/lib/net10.0/System.Data.Odbc.dll": {
-            "related": ".xml"
-          }
-        },
-        "build": {
-          "buildTransitive/net8.0/_._": {}
+          "bin/placeholder/SbaExporter.dll": {}
         }
       }
     }
@@ -966,17 +785,22 @@
         "system.data.odbc.nuspec",
         "useSharedDesignerContext.txt"
       ]
+    },
+    "SbaExporter/1.0.0": {
+      "type": "project",
+      "path": "../SbaExporter/SbaExporter.csproj",
+      "msbuildProject": "../SbaExporter/SbaExporter.csproj"
     }
   },
   "projectFileDependencyGroups": {
     "net10.0": [
       "Newtonsoft.Json >= 13.0.4",
       "Polly >= 8.7.0",
+      "SbaExporter >= 1.0.0",
       "Serilog >= 4.3.1",
       "Serilog.Sinks.Console >= 6.1.1",
       "Serilog.Sinks.File >= 7.0.0",
-      "Swashbuckle.AspNetCore >= 10.2.3",
-      "System.Data.Odbc >= 10.0.9"
+      "Swashbuckle.AspNetCore >= 10.2.3"
     ]
   },
   "packageFolders": {
@@ -1012,7 +836,11 @@
         "net10.0": {
           "framework": "net10.0",
           "targetAlias": "net10.0",
-          "projectReferences": {}
+          "projectReferences": {
+            "C:\\Users\\sitthidech.t\\Desktop\\Balance Inquiry\\SbaExporter\\SbaExporter.csproj": {
+              "projectPath": "C:\\Users\\sitthidech.t\\Desktop\\Balance Inquiry\\SbaExporter\\SbaExporter.csproj"
+            }
+          }
         }
       },
       "warningProperties": {
@@ -1055,10 +883,6 @@
           "Swashbuckle.AspNetCore": {
             "target": "Package",
             "version": "[10.2.3, )"
-          },
-          "System.Data.Odbc": {
-            "target": "Package",
-            "version": "[10.0.9, )"
           }
         },
         "imports": [
@@ -1495,11 +1319,6 @@
           "System.Xml.XPath": "(,4.3.32767]",
           "System.Xml.XPath.XDocument": "(,5.0.32767]"
         }
-      }
-    },
-    "runtimes": {
-      "win-x86": {
-        "#import": []
       }
     }
   }

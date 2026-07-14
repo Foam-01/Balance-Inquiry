@@ -20,9 +20,9 @@ namespace FundBalanceDataPipeline.Infrastructure
         private string _cachedToken = "";
         private DateTime _tokenExpiry;
 
-        public FundConnextAuthService(string baseUrl, string username, string password)
+        public FundConnextAuthService(string baseUrl, string username, string password, HttpClient httpClient)
         {
-            _httpClient = new HttpClient();
+            _httpClient = httpClient;
             _baseUrl = baseUrl;
             _username = username;
             _password = password;

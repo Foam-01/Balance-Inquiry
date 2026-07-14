@@ -14,7 +14,11 @@ using FundBalanceDataPipeline.Infrastructure;
 using FundBalanceDataPipeline.Models;
 using FundBalanceDataPipeline.Services;
 using Serilog;
-using System.Data.Odbc;
+using System.Linq;
+using System.Net.Http;
+
+Console.OutputEncoding = Encoding.UTF8;
+var sharedHttpClient = new HttpClient();
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -27,7 +31,21 @@ builder.Services.AddSwaggerGen(c =>
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
     .WriteTo.Console()
+    .WriteTo.File("logs/pipeline-.txt", rollingInterval: RollingInterval.Day, outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
     .CreateLogger();
+
+AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+{
+    var exception = e.ExceptionObject as Exception;
+    Log.Fatal(exception, " [FATAL CRASH] Unhandled exception occurred in Application Domain. System is shutting down.");
+    Log.CloseAndFlush();
+};
+
+TaskScheduler.UnobservedTaskException += (sender, e) =>
+{
+    Log.Error(e.Exception, " [UNOBSERVED TASK EXCEPTION] An unobserved task exception occurred.");
+    e.SetObserved();
+};
 
 // ใช้งาน Background Service สำหรับการตั้งเวลารันอัตโนมัติ (Auto Run) ในวันแรกของแต่ละเดือน
 builder.Services.AddHostedService<AutoPipelineScheduler>(sp => new AutoPipelineScheduler(
@@ -36,7 +54,6 @@ builder.Services.AddHostedService<AutoPipelineScheduler>(sp => new AutoPipelineS
 
 // กำหนดค่า ConnectionString จาก App.config (ล้อตามคีย์ BA_Connection ใน App.config)
 string xmlConn = AppConfigService.GetConnectionString("BA_Connection");
-SbaDatabaseService.ConnectionString = !string.IsNullOrEmpty(xmlConn) ? xmlConn : SbaDatabaseService.ConnectionString;
 
 var app = builder.Build();
 
@@ -46,28 +63,97 @@ app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Pipeline AP
 // ===================================================================
 //  ดึงข้อมูลยอดคงเหลือพอร์ต (Balance Inquiry) รายงาน FSTKH / FSTKD
 // ===================================================================
-app.MapPost("/api/pipeline/run", async ([FromQuery] string? accountNo, [FromQuery] string? targetDate) =>
+// ตัวแปรสำหรับเก็บสถานะการทำงานใน Background เพื่อความปลอดภัยป้องกันการรันซ้อนและ Timeout
+bool _isPipelineRunning = false;
+string _pipelineStatusMessage = "ระบบยังไม่เคยถูกรันในรอบนี้";
+object? _lastPipelineResult = null;
+
+app.MapPost("/api/pipeline/run", ([FromQuery] string? accountNo, [FromQuery] string? targetDate) =>
 {
+    if (_isPipelineRunning)
+    {
+        return Results.Conflict(new { Message = "ระบบกำลังประมวลผล Data Pipeline อยู่ใน Background กรุณารอสักครู่...", Status = _pipelineStatusMessage });
+    }
+
+    // 1. ดึงข้อมูลจาก SBA บน Main Request Thread (Thread-Safe และไม่เกิด Timeout เนื่องจากดึงข้อมูลคิวรี่รวดเร็ว)
+    string targetDateStr = targetDate ?? "";
+    if (string.IsNullOrEmpty(targetDateStr))
+    {
+        DateTime target = DateTime.Today.AddDays(-1);
+        while (target.DayOfWeek == DayOfWeek.Saturday || target.DayOfWeek == DayOfWeek.Sunday)
+        {
+            target = target.AddDays(-1);
+        }
+        targetDateStr = target.ToString("yyyyMMdd");
+    }
+
+    bool isAllAccounts = string.IsNullOrWhiteSpace(accountNo) || accountNo.Equals("ALL", StringComparison.OrdinalIgnoreCase);
+    List<string>? specificAccounts = isAllAccounts ? null : accountNo!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    Log.Information(" [Pipeline System] กำลังดึงข้อมูลบัญชีและที่อยู่ลูกค้าประเภท 7 จาก SBA ผ่านกระบวนการแยก (Isolated Process)...");
+    List<CustomerPipelineData> pipelineDataList;
     try
     {
-        var result = await RunPipelineInternalAsync(accountNo, targetDate);
-        return Results.Ok(result);
+        pipelineDataList = LoadPipelineDataIsolated(accountNo);
+        Log.Information($" [Pipeline System] พบบัญชีประเภท 7 ที่โหลดขึ้นมาสำเร็จ {pipelineDataList.Count} บัญชี (ผ่านกระบวนการแยก)");
     }
     catch (Exception ex)
     {
-        return Results.Problem($" ระบบประมวลผลขัดข้อง: {ex.Message}");
+        Log.Error(ex, " [Pipeline System] เกิดข้อผิดพลาดในการโหลดข้อมูลจากฐานข้อมูล SBA");
+        return Results.Problem($"เกิดข้อผิดพลาดในการเชื่อมต่อ SBA: {ex.Message}");
     }
+
+    _isPipelineRunning = true;
+    _pipelineStatusMessage = $"เริ่มต้นดึงข้อมูลจาก API ใน Background สำหรับข้อมูลจำนวน {pipelineDataList.Count} รายการ...";
+    _lastPipelineResult = null;
+
+    string finalDateStr = targetDateStr;
+
+    // 2. รันขั้นตอนยิง API และเขียนไฟล์ใน Background Thread (ปลอดภัยจากการแครชของ ODBC เพราะไม่มีการแตะต้อง SBA ใน Background อีกแล้ว)
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            var result = await RunPipelineCoreAsync(pipelineDataList, finalDateStr, isAllAccounts);
+            _lastPipelineResult = result;
+            _pipelineStatusMessage = "ประมวลผล Data Pipeline สำเร็จเสร็จสิ้นอย่างสมบูรณ์แบบ!";
+        }
+        catch (Exception ex)
+        {
+            _pipelineStatusMessage = $"การรันเกิดข้อผิดพลาดขัดข้อง: {ex.Message}";
+            Log.Error(ex, " [Pipeline System] เกิดข้อผิดพลาดร้ายแรงระหว่างประมวลผลใน Background Thread");
+        }
+        finally
+        {
+            _isPipelineRunning = false;
+        }
+    });
+
+    return Results.Accepted("/api/pipeline/status", new 
+    { 
+        Message = $"โหลดข้อมูลลูกค้าจาก SBA สำเร็จ {pipelineDataList.Count} รายการ และกำลังเริ่มต้นประมวลผลดึงยอดเงินจาก API ในเบื้องหลัง...", 
+        CheckStatusAt = "/api/pipeline/status" 
+    });
+});
+
+app.MapGet("/api/pipeline/status", () =>
+{
+    return Results.Ok(new
+    {
+        IsRunning = _isPipelineRunning,
+        Status = _pipelineStatusMessage,
+        LastResult = _lastPipelineResult
+    });
 });
 
 app.Run();
 
-// ฟังก์ชันภายในสำหรับการรัน Data Pipeline (รองรับทั้งการสั่งงานผ่าน API และการสั่งงานอัตโนมัติจาก Scheduler)
+// ฟังก์ชันดั้งเดิมสำหรับการรันผ่าน Scheduler (ซึ่งทำงานเป็น Background Worker อยู่แล้วและไม่ชนเรื่อง Timeout)
 async Task<object> RunPipelineInternalAsync(string? accountNo, string? targetDate)
 {
     string targetDateStr = targetDate ?? "";
     if (string.IsNullOrEmpty(targetDateStr))
     {
-        // คำนวณวันทำการย้อนหลัง 1 วันทำการโดยอัตโนมัติ (ไม่ตรงกับเสาร์-อาทิตย์)
         DateTime target = DateTime.Today.AddDays(-1);
         while (target.DayOfWeek == DayOfWeek.Saturday || target.DayOfWeek == DayOfWeek.Sunday)
         {
@@ -80,56 +166,35 @@ async Task<object> RunPipelineInternalAsync(string? accountNo, string? targetDat
     bool isAllAccounts = string.IsNullOrWhiteSpace(accountNo) || accountNo.Equals("ALL", StringComparison.OrdinalIgnoreCase);
     List<string>? specificAccounts = isAllAccounts ? null : accountNo!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
-    Log.Information(" [Pipeline System] กำลังดึงข้อมูลบัญชีและที่อยู่ลูกค้าประเภท 7 จาก SBA ขึ้น Memory...");
-    var pipelineDataList = SbaDatabaseService.LoadAllPipelineDataFromSba(specificAccounts);
+    Log.Information(" [Pipeline System] กำลังดึงข้อมูลบัญชีและที่อยู่ลูกค้าประเภท 7 จาก SBA ผ่านกระบวนการแยก (Isolated Process)...");
+    var pipelineDataList = LoadPipelineDataIsolated(accountNo);
+    Log.Information($" [Pipeline System] พบบัญชีประเภท 7 ที่โหลดขึ้นมาสำเร็จ {pipelineDataList.Count} บัญชี (ผ่านกระบวนการแยก)");
 
-    // หากระบุบัญชีทดสอบที่ไม่มีในฐานข้อมูล SBA (เช่น บัญชีทดสอบ 0099901-7 บน FundConnext Stage)
-    // ระบบจะทำการจำลองเฉพาะ "ชื่อ-ที่อยู่ลูกค้า" เพื่อใช้สร้างรายงาน FSTKH และยอมให้ไปยิงดึงยอดกองทุนจริงจาก API
-    if (pipelineDataList.Count == 0 && specificAccounts != null && specificAccounts.Count > 0)
-    {
-        Log.Warning(" [Pipeline System] ไม่พบเลขบัญชีดังกล่าวในฐานข้อมูล SBA ระบบทำการจำลองข้อมูลลูกค้าชั่วคราว (Fallback Customer Data) เพื่อส่งไปเรียกใช้งาน API ทดสอบ...");
-        foreach (var acc in specificAccounts)
-        {
-            pipelineDataList.Add(new CustomerPipelineData
-            {
-                AccountNo = acc,
-                DbAccount = acc,
-                Customer = new CustomerData
-                {
-                    CustomerName = "บัญชีทดสอบพิเศษ (STAGE TEST)",
-                    BranchName = "สำนักงานใหญ่",
-                    AEName = "ผู้ดูแลระบบเทส",
-                    HouseNo = "99/9",
-                    Soi = "ซอยทดสอบ",
-                    Road = "ถนนทดสอบ",
-                    Subdistrict = "พญาไท",
-                    District = "พญาไท",
-                    Province = "กรุงเทพมหานคร",
-                    Zipcode = "10400"
-                }
-            });
-        }
-    }
+    return await RunPipelineCoreAsync(pipelineDataList, targetDateStr, isAllAccounts);
+}
 
-    Log.Information($" [Pipeline System] พบบัญชีประเภท 7 ที่โหลดขึ้นมาสำเร็จ {pipelineDataList.Count} บัญชี (ปิดการเชื่อมต่อฐานข้อมูล SBA เรียบร้อย)");
-
+// ฟังก์ชันแกนหลักสำหรับการยิง API และเขียนรายงาน
+async Task<object> RunPipelineCoreAsync(List<CustomerPipelineData> pipelineDataList, string targetDateStr, bool isAllAccounts)
+{
     string fundConnextBaseUrl = AppConfigService.GetAppSetting("linkAPI_FCN");
-    if (string.IsNullOrEmpty(fundConnextBaseUrl)) fundConnextBaseUrl = "https://stage.fundconnext.com/api";
+    if (string.IsNullOrEmpty(fundConnextBaseUrl)) fundConnextBaseUrl = "https://www.fundconnext.com/api";
 
     string apiUser = AppConfigService.GetAppSetting("username_FCN");
     if (string.IsNullOrEmpty(apiUser)) apiUser = "API_AIRA01";
 
     string apiPass = AppConfigService.GetAppSetting("password_FCN");
-    if (string.IsNullOrEmpty(apiPass)) apiPass = "Xc8uAgvP:Y]/t3*y";
+    if (string.IsNullOrEmpty(apiPass)) apiPass = "q%!c.*(yV3S_WE@F";
 
-    var authService = new FundConnextAuthService(fundConnextBaseUrl, apiUser, apiPass);
-    var fundClient = new FundConnextClient(fundConnextBaseUrl, authService);
+    var authService = new FundConnextAuthService(fundConnextBaseUrl, apiUser, apiPass, sharedHttpClient);
+    var fundClient = new FundConnextClient(fundConnextBaseUrl, authService, sharedHttpClient);
 
     string headerFileName = $"FSTKH_{targetDateStr}.txt";
     string detailFileName = $"FSTKD_{targetDateStr}.txt";
 
     int headerCount = 0;
     int detailCount = 0;
+    int successCount = 0;
+    int noDataCount = 0;
     int failedCount = 0;
     var summaryTrail = new List<object>();
 
@@ -138,15 +203,19 @@ async Task<object> RunPipelineInternalAsync(string? accountNo, string? targetDat
     using (var headerWriter = new StreamWriter(headerFileName, shouldAppend, Encoding.UTF8) { AutoFlush = true })
     using (var detailWriter = new StreamWriter(detailFileName, shouldAppend, Encoding.UTF8) { AutoFlush = true })
     {
+        int currentIndex = 0;
+        int totalCount = pipelineDataList.Count;
+
         foreach (var item in pipelineDataList)
         {
+            currentIndex++;
             string rawAccount = item.AccountNo;
             try
             {
                 // หน่วงเวลา 250ms เพื่อให้ระบบเครือข่ายได้พัก ป้องกันโดน Firewall บล็อกและพอร์ต Socket เต็ม
                 await Task.Delay(250);
 
-                string formattedAccount = item.AccountNo;
+                string formattedAccount = FormatAiraAccount(item.AccountNo);
                 string dbAccount = item.DbAccount;
                 var customerData = item.Customer;
 
@@ -164,14 +233,14 @@ async Task<object> RunPipelineInternalAsync(string? accountNo, string? targetDat
 
                 foreach (var candidate in candidates)
                 {
-                    Log.Information($" [Pipeline System] กำลังทดลองดึงข้อมูลจาก API ด้วยบัญชี: {candidate}");
+                    Log.Information($" [Pipeline System] [{currentIndex}/{totalCount}] กำลังทดลองดึงข้อมูลจาก API ด้วยบัญชี: {candidate}");
                     var tempResponse = await fundClient.GetAccountBalancesAsync(candidate);
 
                     if (tempResponse != null)
                     {
                         balanceResponse = tempResponse;
                         successfulAccountNo = candidate;
-                        Log.Information($" [Pipeline System] ค้นพบรูปแบบบัญชีที่ถูกต้อง: {candidate} (สามารถดึงข้อมูลได้สำเร็จ)");
+                        Log.Information($" [Pipeline System] [{currentIndex}/{totalCount}] ค้นพบรูปแบบบัญชีที่ถูกต้อง: {candidate} (สามารถดึงข้อมูลได้สำเร็จ)");
                         break;
                     }
                 }
@@ -200,10 +269,12 @@ async Task<object> RunPipelineInternalAsync(string? accountNo, string? targetDat
                         await detailWriter.WriteLineAsync(detailLine);
                         detailCount++;
                     }
+                    successCount++;
                     summaryTrail.Add(new { Account = formattedAccount, Status = $"Data Fetched from API (using {successfulAccountNo})", FundsExtracted = balanceResponse.Result.Count });
                 }
                 else
                 {
+                    noDataCount++;
                     summaryTrail.Add(new { Account = formattedAccount, Status = $"No Records on API Path (Tried {candidates.Count} formats)", FundsExtracted = 0 });
                 }
             }
@@ -217,19 +288,117 @@ async Task<object> RunPipelineInternalAsync(string? accountNo, string? targetDat
     }
 
     Log.Information(" ===================================================================");
-    Log.Information("  [Pipeline System] สรุปผลการประมวลผล Data Pipeline:");
-    Log.Information($"  - จำนวนบัญชีที่โหลดมาประมวลผลทั้งหมด: {pipelineDataList.Count} บัญชี");
-    Log.Information($"  - จำนวนแถวที่เขียนลงรายงาน FSTKH (สำเร็จ): {headerCount} แถว");
-    Log.Information($"  - จำนวนแถวที่เขียนลงรายงาน FSTKD (กองทุน): {detailCount} แถว");
-    Log.Information($"  - จำนวนบัญชีที่เกิดข้อผิดพลาด: {failedCount} บัญชี");
+    Log.Information("  [Pipeline System] สรุปผลการประมวลผล Data Pipeline สำเร็จเสร็จสิ้น!");
+    Log.Information($"  - จำนวนบัญชีทั้งหมดในระบบ: {pipelineDataList.Count} บัญชี");
+    Log.Information($"  - ดึงข้อมูลพอร์ตยอดคงเหลือสำเร็จ: {successCount} บัญชี");
+    Log.Information($"  - ไม่มีข้อมูลพอร์ตคงเหลืออยู่บนระบบ API: {noDataCount} บัญชี");
+    Log.Information($"  - เกิดข้อผิดพลาดในการประมวลผล: {failedCount} บัญชี");
+    Log.Information($"  - จำนวนแถวรายงานที่สร้าง (FSTKH - ข้อมูลลูกค้า): {headerCount} แถว");
+    Log.Information($"  - จำนวนแถวรายงานที่สร้าง (FSTKD - ข้อมูลยอดกองทุน): {detailCount} แถว");
     Log.Information(" ===================================================================");
 
     return new
     {
-        Message = " ดำเนินการทำ Data Pipeline จากเส้นทาง Balance Inquiry สำเร็จเสร็จสิ้น!",
+        Message = "ดำเนินการทำ Data Pipeline จากเส้นทาง Balance Inquiry สำเร็จเสร็จสิ้น!",
         TargetDate = targetDateStr,
+        ProcessedStats = new
+        {
+            TotalAccounts = pipelineDataList.Count,
+            SuccessAccounts = successCount,
+            NoDataAccounts = noDataCount,
+            FailedAccounts = failedCount,
+            HeaderRows = headerCount,
+            DetailRows = detailCount
+        },
         FilesGenerated = new { Header = headerFileName, Detail = detailFileName },
-        ProcessedRows = new { HeaderRows = headerCount, DetailRows = detailCount },
         AuditTrail = summaryTrail
     };
+}
+
+string FormatAiraAccount(string rawAccount)
+{
+    if (string.IsNullOrEmpty(rawAccount)) return "";
+    rawAccount = rawAccount.Trim();
+    int dashIdx = rawAccount.IndexOf('-');
+    if (dashIdx >= 0)
+    {
+        string prefix = rawAccount.Substring(0, dashIdx);
+        string suffix = rawAccount.Substring(dashIdx + 1);
+        // เติม 0 ให้ส่วนหน้าครบ 7 หลัก (เช่น 61117 -> 0061117)
+        return $"{prefix.PadLeft(7, '0')}-{suffix}";
+    }
+    else
+    {
+        // เติม 0 ให้ครบ 8 หลัก
+        return rawAccount.PadLeft(8, '0');
+    }
+}
+
+List<CustomerPipelineData> LoadPipelineDataIsolated(string? accountNo)
+{
+    // 1. ค้นหาไฟล์ SbaExporter.exe โดยจัดลำดับความสำคัญให้โฟลเดอร์ของมันเองในระหว่างพัฒนา (เพื่อเลี่ยงไฟล์ DLL หลอกในโฟลเดอร์หลัก)
+    string devExporterPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "SbaExporter", "bin", "Debug", "net10.0", "win-x86", "SbaExporter.exe");
+    string exporterExePath = File.Exists(devExporterPath) ? devExporterPath : Path.Combine(AppContext.BaseDirectory, "SbaExporter.exe");
+
+    string arguments = accountNo != null ? $"\"{accountNo}\"" : "ALL";
+    
+    // กำหนดพาธไฟล์ผลลัพธ์ JSON ในโฟลเดอร์เดียวกับโปรเซสย่อย
+    string exporterDir = Path.GetDirectoryName(exporterExePath) ?? AppContext.BaseDirectory;
+    string tempFile = Path.Combine(exporterDir, "sba_temp_data.json");
+
+    if (File.Exists(tempFile))
+    {
+        try { File.Delete(tempFile); } catch {}
+    }
+
+    using (var process = new System.Diagnostics.Process())
+    {
+        process.StartInfo.FileName = exporterExePath;
+        process.StartInfo.Arguments = arguments;
+        process.StartInfo.WorkingDirectory = exporterDir;
+
+        // ส่งผ่าน Connection String จาก App.config ไปยังโปรเซสย่อย
+        string xmlConn = AppConfigService.GetConnectionString("BA_Connection");
+        if (!string.IsNullOrEmpty(xmlConn))
+        {
+            process.StartInfo.EnvironmentVariables["SBA_CONNECTION_STRING"] = xmlConn;
+        }
+
+        process.StartInfo.UseShellExecute = false;
+        process.StartInfo.CreateNoWindow = true;
+        process.StartInfo.RedirectStandardOutput = true;
+        process.StartInfo.RedirectStandardError = true;
+
+        process.Start();
+        
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+        
+        process.WaitForExit();
+
+        if (!string.IsNullOrEmpty(stdout))
+        {
+            Log.Information($"[Isolated Output]\n{stdout.Trim()}");
+        }
+        if (!string.IsNullOrEmpty(stderr))
+        {
+            Log.Warning($"[Isolated Error]\n{stderr.Trim()}");
+        }
+
+        if (process.ExitCode != 0)
+        {
+            throw new Exception($"กระบวนการแยกดึงข้อมูล SBA (SbaExporter.exe) สิ้นสุดลงด้วยข้อผิดพลาด (Exit Code: {process.ExitCode})");
+        }
+    }
+
+    if (!File.Exists(tempFile))
+    {
+        throw new FileNotFoundException("ไม่พบไฟล์ผลลัพธ์ข้อมูล SBA คาดว่าโปรเซสย่อย SbaExporter.exe แครชระหว่างเข้าใช้งานไดรเวอร์ ODBC");
+    }
+
+    string json = File.ReadAllText(tempFile, Encoding.UTF8);
+    var list = Newtonsoft.Json.JsonConvert.DeserializeObject<List<CustomerPipelineData>>(json) ?? new();
+
+    try { File.Delete(tempFile); } catch {}
+    return list;
 }
