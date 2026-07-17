@@ -5,6 +5,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- ปิดการสร้างไฟล์ .exe (AppHost) เพื่อบังคับให้ dotnet run และการเปิดใช้งานรันผ่านโฮสต์หลักของ Microsoft (dotnet.exe) ตรงๆ -->
+    <!-- ป้องกันปัญหาตัวสแกนไวรัส (EDR/Antivirus) สั่งปิดโปรเซสเนื่องจากไฟล์ .exe ของเราไม่มีลายเซ็นดิจิทัลรับรอง (Unsigned Binary) -->
+    <UseAppHost>false</UseAppHost>
   </PropertyGroup>
 
   <ItemGroup>

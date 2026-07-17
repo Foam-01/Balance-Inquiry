@@ -3,7 +3,6 @@ c:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\bin\Debug\
 c:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\bin\Debug\net10.0\SbaExporter.exe
 c:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\bin\Debug\net10.0\App.config
 c:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\bin\Debug\net10.0\FundBalanceDataPipeline.staticwebassets.endpoints.json
-c:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\bin\Debug\net10.0\FundBalanceDataPipeline.exe
 c:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\bin\Debug\net10.0\FundBalanceDataPipeline.dll.config
 c:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\bin\Debug\net10.0\FundBalanceDataPipeline.deps.json
 c:\Users\sitthidech.t\Desktop\Balance Inquiry\FundBalanceDataPipeline\bin\Debug\net10.0\FundBalanceDataPipeline.runtimeconfig.json
